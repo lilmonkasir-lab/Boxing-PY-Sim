@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Downloaded 3D models - fetch your own copy, see assets/models/README.md
+assets/models/*
+!assets/models/README.md
+
+# headless screenshots
+/shots/
+image-search/

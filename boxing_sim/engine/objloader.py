@@ -1,0 +1,135 @@
+"""Minimal Wavefront .OBJ / .MTL loader.
+
+Purpose: let the player drop the real Sketchfab "Boxing Ring" download
+(https://sketchfab.com/3d-models/boxing-ring-861f09ce71014e4baebeb79b2f99b1d2)
+into ``assets/models/`` and have the sim use it instead of the procedural ring.
+
+Because the renderer is flat-shaded and per-face coloured, we resolve each
+face's colour from its material's diffuse ``Kd`` (or the average colour of the
+material's diffuse texture when pygame can load it).  Textures are not sampled
+per pixel - that would be far too slow in pure python.
+"""
+from __future__ import annotations
+
+import os
+from typing import Dict
+
+import numpy as np
+
+from .mesh import Mesh
+
+
+def _parse_mtl(path: str) -> Dict[str, tuple]:
+    mats: Dict[str, tuple] = {}
+    cur = None
+    base = os.path.dirname(path)
+    if not os.path.isfile(path):
+        return mats
+    try:
+        with open(path, "r", errors="ignore") as fh:
+            for line in fh:
+                parts = line.split()
+                if not parts:
+                    continue
+                tag = parts[0].lower()
+                if tag == "newmtl":
+                    cur = " ".join(parts[1:])
+                    mats[cur] = (190.0, 190.0, 190.0)
+                elif cur is None:
+                    continue
+                elif tag == "kd" and len(parts) >= 4:
+                    mats[cur] = (float(parts[1]) * 255.0,
+                                 float(parts[2]) * 255.0,
+                                 float(parts[3]) * 255.0)
+                elif tag == "map_kd":
+                    tex = os.path.join(base, " ".join(parts[1:]).replace("\\", "/"))
+                    avg = _texture_average(tex)
+                    if avg is not None:
+                        mats[cur] = avg
+    except OSError:
+        pass
+    return mats
+
+
+def _texture_average(path: str):
+    if not os.path.isfile(path):
+        return None
+    try:
+        import pygame
+        surf = pygame.image.load(path)
+        small = pygame.transform.smoothscale(surf, (8, 8))
+        arr = pygame.surfarray.array3d(small).astype(np.float32)
+        return tuple(arr.reshape(-1, 3).mean(axis=0).tolist())
+    except Exception:
+        return None
+
+
+def load_obj(path: str, swap_yz: bool = False, flip_x: bool = False,
+             default_color=(185, 185, 190), max_tris: int | None = None) -> Mesh:
+    """Load an OBJ into a flat-shaded :class:`Mesh`.
+
+    Polygons with more than 3 corners are fanned into triangles.
+    """
+    verts: list = []
+    faces: list = []
+    fcols: list = []
+    mats: Dict[str, tuple] = {}
+    cur_col = tuple(float(c) for c in default_color)
+
+    with open(path, "r", errors="ignore") as fh:
+        for line in fh:
+            if not line or line[0] == "#":
+                continue
+            parts = line.split()
+            if not parts:
+                continue
+            tag = parts[0]
+            if tag == "v":
+                verts.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            elif tag == "f":
+                idx = []
+                for p in parts[1:]:
+                    s = p.split("/")[0]
+                    if not s:
+                        continue
+                    i = int(s)
+                    idx.append(i - 1 if i > 0 else len(verts) + i)
+                for k in range(1, len(idx) - 1):
+                    faces.append((idx[0], idx[k], idx[k + 1]))
+                    fcols.append(cur_col)
+            elif tag == "mtllib":
+                mtl = os.path.join(os.path.dirname(path), " ".join(parts[1:]))
+                mats.update(_parse_mtl(mtl))
+            elif tag == "usemtl":
+                cur_col = mats.get(" ".join(parts[1:]), cur_col)
+
+    if not verts or not faces:
+        raise ValueError(f"{path}: no geometry found")
+
+    v = np.array(verts, np.float32)
+    if swap_yz:
+        v = v[:, [0, 2, 1]]
+        v[:, 2] *= -1.0
+    if flip_x:
+        v[:, 0] *= -1.0
+    mesh = Mesh(v, np.array(faces, np.int32), np.array(fcols, np.float32),
+                os.path.basename(path))
+    if max_tris:
+        mesh = mesh.decimate(max_tris)
+    return mesh
+
+
+def find_model(directory: str, stem_hint: str = "ring"):
+    """Return the best OBJ candidate in `directory`, or None."""
+    if not os.path.isdir(directory):
+        return None
+    cands = []
+    for root, _dirs, files in os.walk(directory):
+        for f in files:
+            if f.lower().endswith(".obj"):
+                cands.append(os.path.join(root, f))
+    if not cands:
+        return None
+    cands.sort(key=lambda p: (stem_hint not in os.path.basename(p).lower(),
+                              len(p)))
+    return cands[0]

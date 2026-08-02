@@ -16,6 +16,8 @@ from ..engine import math3d as m3
 from ..engine.mesh import Mesh
 from ..engine import renderer as _R
 from ..engine.primitives import box, capsule, cylinder, sphere
+from .skills import (Conditioning, CounterWindow, Momentum, ParryWindow,
+                     Stance, combo_multiplier)
 
 # ---------------------------------------------------------------------------
 # punch definitions
@@ -97,51 +99,78 @@ class FighterMeshes:
         self.chest = Mesh.combine([
             box(0.56, 0.42, 0.32, s, (0, 0.21, 0)),
             box(0.50, 0.10, 0.30, tuple(min(255, c * 0.94) for c in s), (0, 0.45, 0)),
-        ], "chest")
+        ], "chest").with_material("skin")
         self.abdomen = Mesh.combine([
             box(0.46, 0.30, 0.28, s, (0, -0.15, 0)),
-        ], "abs")
+        ], "abs").with_material("skin")
         self.hips = Mesh.combine([
             box(0.50, 0.30, 0.30, t, (0, -0.15, 0)),
             box(0.52, 0.07, 0.32, tt, (0, -0.02, 0)),
-        ], "hips")
+        ], "hips").with_material("satin")
         self.head = Mesh.combine([
             box(0.26, 0.30, 0.26, s, (0, 0.15, 0)),
             box(0.27, 0.10, 0.25, hr, (0, 0.30, 0)),
             box(0.10, 0.05, 0.03, (30, 30, 34), (-0.07, 0.16, 0.13)),
             box(0.10, 0.05, 0.03, (30, 30, 34), (0.07, 0.16, 0.13)),
-        ], "head")
-        self.neck = cylinder(0.075, 0.10, 6, tuple(min(255, c * 0.9) for c in s), (0, 0.05, 0))
+        ], "head").with_material("skin")
+        self.neck = cylinder(0.075, 0.10, 6, tuple(min(255, c * 0.9) for c in s),
+                             (0, 0.05, 0)).with_material("skin")
         # segment meshes span exactly Fighter.UPPER_ARM / Fighter.FOREARM so
         # the visible limb matches the reach used for hit detection
-        self.upper_arm = capsule(0.085, 0.36 - 2 * 0.085, 3, 8, s, (0, -0.18, 0))
-        self.forearm = capsule(0.078, 0.38 - 2 * 0.078, 3, 8, s, (0, -0.19, 0))
+        self.upper_arm = capsule(0.085, 0.36 - 2 * 0.085, 3, 8, s,
+                                 (0, -0.18, 0)).with_material("skin")
+        self.forearm = capsule(0.078, 0.38 - 2 * 0.078, 3, 8, s,
+                               (0, -0.19, 0)).with_material("skin")
         self.glove = Mesh.combine([
             sphere(0.135, 5, 9, g, (0, -0.02, 0)),
             box(0.16, 0.09, 0.16, tuple(min(255, c * 0.82) for c in g), (0, 0.10, 0)),
-        ], "glove")
-        self.thigh = capsule(0.105, 0.30, 3, 8, s, (0, -0.20, 0))
-        self.shin = capsule(0.088, 0.30, 3, 8, s, (0, -0.20, 0))
+        ], "glove").with_material("leather")
+        self.thigh = capsule(0.105, 0.30, 3, 8, s, (0, -0.20, 0)).with_material("skin")
+        self.shin = capsule(0.088, 0.30, 3, 8, s, (0, -0.20, 0)).with_material("skin")
         self.foot = Mesh.combine([
             box(0.15, 0.11, 0.30, b, (0, -0.05, 0.05)),
             box(0.14, 0.16, 0.13, b, (0, 0.05, -0.03)),
-        ], "boot")
+        ], "boot").with_material("leather")
         self.shadow = self._shadow()
         FighterMeshes._cache[key] = self
 
     @staticmethod
     def _shadow():
+        """Soft contact shadow: concentric rings fading outward.
+
+        A single flat disc reads as a sticker on the canvas.  Two graded rings
+        - dark core, lighter halo - give the falloff a real soft shadow has,
+        which is most of what makes a fighter look planted rather than
+        hovering.  Unlit, so the lighting rig cannot brighten it back up.
+        """
+        rings = [(0.30, 0.21, (34, 34, 44)),
+                 (0.46, 0.32, (58, 59, 72)),
+                 (0.62, 0.44, (86, 88, 102))]
+        n = 14
         verts = [[0.0, 0.0, 0.0]]
         faces, cols = [], []
-        n = 12
-        for i in range(n + 1):
-            a = 2 * math.pi * i / n
-            verts.append([math.cos(a) * 0.42, 0.0, math.sin(a) * 0.30])
-        for i in range(1, n + 1):
-            faces.append([0, i + 1, i])
-            cols.append((44, 44, 56))
-        return Mesh(np.array(verts, np.float32), np.array(faces, np.int32),
-                    np.array(cols, np.float32), "shadow")
+        prev_start = None
+        for rx, rz, col in rings:
+            start = len(verts)
+            for i in range(n):
+                a = 2 * math.pi * i / n
+                verts.append([math.cos(a) * rx, 0.0, math.sin(a) * rz])
+            if prev_start is None:
+                for i in range(n):                       # fan from the centre
+                    faces.append([0, start + (i + 1) % n, start + i])
+                    cols.append(col)
+            else:
+                for i in range(n):                       # ring band
+                    j = (i + 1) % n
+                    faces.append([prev_start + i, start + j, start + i])
+                    cols.append(col)
+                    faces.append([prev_start + i, prev_start + j, start + j])
+                    cols.append(col)
+            prev_start = start
+        m = Mesh(np.array(verts, np.float32), np.array(faces, np.int32),
+                 np.array(cols, np.float32), "shadow")
+        m.unlit = True
+        return m
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +227,17 @@ class Fighter:
         self.combo = 0
         self.combo_timer = 0.0
 
+        # --- skill systems ------------------------------------------------
+        self.stance = Stance(southpaw=False, bladed=0.65)
+        self.parry = ParryWindow()
+        self.momentum = Momentum()
+        self.condition = Conditioning()
+        self.parries_landed = 0
+        self.counters_landed = 0
+        self.clinch = 0.0            # >0 while tied up
+        self.clinch_cool = 0.0
+        self.last_parry_flash = 0.0
+
         self.bob = 0.0
         # world point the punching hand steers toward (set from the opponent)
         self.aim_point = np.asarray(pos, dtype=np.float32) + m3.vec3(0, 1.6, 1.0)
@@ -225,6 +265,29 @@ class Fighter:
     def busy(self) -> bool:
         return self.punch.active or self.down or self.stun > 0.0
 
+    @property
+    def effective_power(self) -> float:
+        """Power after stance, momentum and combo pressure."""
+        return (self.stats.power * self.stance.power_mult
+                * self.momentum.power_mult * combo_multiplier(self.combo))
+
+    @property
+    def effective_speed(self) -> float:
+        return self.stats.speed * self.momentum.speed_mult
+
+    @property
+    def effective_reach(self) -> float:
+        return self.stats.reach * self.stance.reach_mult
+
+    @property
+    def evasion(self) -> float:
+        """Chance modifier for slipping shots; swelling eats into it."""
+        return max(0.0, self.stance.evasion - self.condition.evasion_penalty)
+
+    @property
+    def stamina_max_now(self) -> float:
+        return self.stats.stamina_max * self.condition.stamina_ceiling
+
     def forward(self) -> np.ndarray:
         return m3.vec3(math.sin(self.facing), 0.0, math.cos(self.facing))
 
@@ -246,7 +309,7 @@ class Fighter:
         cost = p.stamina * (1.6 if self.stamina < 25 else 1.0)
         if self.stamina < cost * 0.5:
             return False
-        spd = self.stats.speed * (0.72 + 0.28 * (self.stamina / self.stats.stamina_max))
+        spd = self.effective_speed * (0.72 + 0.28 * (self.stamina / self.stats.stamina_max))
         total = (p.wind + p.strike + p.recover) / max(0.35, spd)
         self.punch = PunchState(key, 0.0, total, False, p.hand)
         self.stamina = max(0.0, self.stamina - cost)
@@ -325,8 +388,10 @@ class Fighter:
         self.stun = 0.0
         self.down = False
         self.punch = PunchState()
-        self.stamina = min(self.stats.stamina_max,
+        self.stamina = min(self.stamina_max_now,
                            self.stamina + self.stats.stamina_max * 0.42)
+        self.condition.round_recovery()
+        self.momentum.value *= 0.5
         self.health = min(100.0, self.health + 12.0)
         self.guard_break = max(0.0, self.guard_break - 0.5)
 
@@ -353,6 +418,11 @@ class Fighter:
         self._recoil = max(0.0, self._recoil - dt * 3.2)
         self.guard_break = max(0.0, self.guard_break - dt * 0.12)
         self.dodge_cool = max(0.0, self.dodge_cool - dt)
+        self.parry.update(dt)
+        self.momentum.update(dt)
+        self.clinch = max(0.0, self.clinch - dt)
+        self.clinch_cool = max(0.0, self.clinch_cool - dt)
+        self.last_parry_flash = max(0.0, self.last_parry_flash - dt * 2.5)
         if self.combo_timer > 0.0:
             self.combo_timer -= dt
             if self.combo_timer <= 0.0:
@@ -369,7 +439,7 @@ class Fighter:
         regen = 15.5 if self.block else (11.0 if not self.punch.active else 3.0)
         if self.down or stunned:
             regen = 6.0
-        self.stamina = min(self.stats.stamina_max, self.stamina + regen * dt)
+        self.stamina = min(self.stamina_max_now, self.stamina + regen * dt)
 
         # --- movement ---------------------------------------------------
         mx, mz = float(move[0]), float(move[1])
@@ -377,7 +447,7 @@ class Fighter:
         if mag > 1.0:
             mx, mz = mx / mag, mz / mag
             mag = 1.0
-        speed = 3.05 * self.stats.speed
+        speed = 3.05 * self.stats.speed * self.stance.move_speed_mult
         if self.block:
             speed *= 0.52
         if self.punch.active:

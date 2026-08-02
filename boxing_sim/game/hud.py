@@ -104,27 +104,56 @@ class HUD:
 
         # knockdown pips
         for i in range(p.knockdowns):
-            pygame.draw.circle(surface, RED, (30 + i * 16, 84), 5)
+            pygame.draw.circle(surface, RED, (30 + i * 16, 68), 4)
         for i in range(o.knockdowns):
-            pygame.draw.circle(surface, BLUE, (w - 30 - i * 16, 84), 5)
+            pygame.draw.circle(surface, BLUE, (w - 30 - i * 16, 68), 4)
+
+        # ---- momentum meters -------------------------------------------
+        # sits under the health bars: fills with clean work, empties when hurt
+        for f, x, flip in ((p, 24, False), (o, w - 24 - bar_w, True)):
+            mv = f.momentum
+            col = (255, 208, 96) if not mv.in_zone else (255, 120, 220)
+            frac = 1.0 if mv.in_zone else mv.value
+            _bar(surface, (x, 76, bar_w, 5), frac, col, back=(26, 27, 38),
+                 flip=flip, glow=0.8 if mv.in_zone else 0.0)
+
+        # ---- stance + damage readout ------------------------------------
+        st = self.f_tiny.render(p.stance.name, True, (150, 168, 210))
+        surface.blit(st, (24, 86))
+        marks = []
+        if p.condition.cut > 0.05:
+            marks.append(("CUT", (235, 70, 70)))
+        if p.condition.swelling > 0.35:
+            marks.append(("SWELLING", (235, 160, 70)))
+        mx = 24 + st.get_width() + 12
+        for text, mc in marks:
+            t = self.f_tiny.render(text, True, mc)
+            surface.blit(t, (mx, 86))
+            mx += t.get_width() + 10
 
         # ---- combo counter --------------------------------------------------
         if p.combo > 1:
-            c = self.f_mid.render(f"{p.combo} HIT COMBO", True, GOLD)
+            from .skills import combo_label
+            name = combo_label(p.combo)
+            label = f"{p.combo} HIT {name}".strip() if name else f"{p.combo} HIT COMBO"
+            c = self.f_mid.render(label, True, GOLD)
             surface.blit(c, (w // 2 - c.get_width() // 2, 104))
+        if p.momentum.in_zone:
+            z = self.f_small.render("IN THE ZONE", True, (255, 120, 220))
+            surface.blit(z, (w // 2 - z.get_width() // 2, 132))
 
         # ---- stats strip ----------------------------------------------------
         acc_p = (p.stats_landed / p.stats_thrown * 100) if p.stats_thrown else 0.0
         acc_o = (o.stats_landed / o.stats_thrown * 100) if o.stats_thrown else 0.0
         s1 = self.f_tiny.render(f"landed {p.stats_landed}/{p.stats_thrown}  ({acc_p:.0f}%)",
                                 True, DIM)
-        surface.blit(s1, (24, 78))
+        surface.blit(s1, (24, 100))
         s2 = self.f_tiny.render(f"landed {o.stats_landed}/{o.stats_thrown}  ({acc_o:.0f}%)",
                                 True, DIM)
-        surface.blit(s2, (w - 24 - s2.get_width(), 78))
+        surface.blit(s2, (w - 24 - s2.get_width(), 100))
 
         # ---- toasts -----------------------------------------------------------
-        y = 120
+        y = 150
         for text, color, life, maxlife in self.toast[-5:]:
             s = self.f_small.render(text, True, color)
             s.set_alpha(int(255 * min(1.0, life / maxlife * 2.4)))
@@ -149,7 +178,8 @@ class HUD:
                 surface.blit(sub, (w // 2 - sub.get_width() // 2, h // 2 - 26))
 
         # ---- controls hint -------------------------------------------------------
-        hint = "WASD move   J jab   K cross   U/I hooks   O uppercut   H/L body   SPACE block   SHIFT slip   C camera"
+        hint = ("WASD  J/K jab-cross  U/I hooks  O upper  H/L body   "
+                "SPACE guard  F PARRY  SHIFT slip  Z/X stance  Q switch  C cam")
         s = self.f_tiny.render(hint, True, (120, 126, 146))
         bg = pygame.Surface((s.get_width() + 20, s.get_height() + 8), pygame.SRCALPHA)
         bg.fill((8, 9, 16, 150))
@@ -198,6 +228,8 @@ class HUD:
             ("Accuracy", f"{(p.stats_landed/p.stats_thrown*100 if p.stats_thrown else 0):.0f}%",
              f"{(o.stats_landed/o.stats_thrown*100 if o.stats_thrown else 0):.0f}%"),
             ("Blocks", f"{p.stats_blocked}", f"{o.stats_blocked}"),
+            ("Parries", f"{p.parries_landed}", f"{o.parries_landed}"),
+            ("Counters landed", f"{p.counters_landed}", f"{o.counters_landed}"),
             ("Knockdowns scored", f"{o.knockdowns}", f"{p.knockdowns}"),
             ("Damage dealt", f"{p.damage_dealt:.0f}", f"{o.damage_dealt:.0f}"),
         ]

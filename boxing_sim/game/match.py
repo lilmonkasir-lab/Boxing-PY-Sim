@@ -167,6 +167,14 @@ class Match:
         block = pin.get("block", False) if allow else False
         duck = pin.get("duck", False) if allow else False
         if allow:
+            if pin.get("parry") and p.parry.trigger():
+                self.emit("parry_attempt", fighter=p)
+            if pin.get("stance_toggle"):
+                p.stance.toggle_side()
+                self.emit("stance", fighter=p, text=p.stance.name)
+            sn = pin.get("stance_nudge", 0.0)
+            if sn:
+                p.stance.nudge(sn)
             for key in pin.get("punches", ()):
                 if p.try_punch(key):
                     self.emit("throw", fighter=p, key=key)
@@ -176,6 +184,8 @@ class Match:
         self.ai.update(dt if allow else dt * 0.4, p, self.arena)
         if allow:
             before = o.punch.key
+            if self.ai.want_parry:
+                o.parry.trigger()
             o.update(dt, p, self.arena, self.ai.move, self.ai.want_block,
                      self.ai.want_duck, allow_input=True)
             if o.punch.key and o.punch.key != before and o.punch.t < 1e-4:
@@ -188,7 +198,9 @@ class Match:
             res = resolve_punch(att, dfn, self.rng)
             if res is None:
                 continue
-            if res.slipped:
+            if res.parried:
+                self.emit("parry", point=res.point, attacker=att, defender=dfn)
+            elif res.slipped:
                 self.emit("slip", point=res.point, defender=dfn)
             elif res.blocked:
                 self.emit("block", point=res.point, damage=res.damage,
@@ -196,9 +208,14 @@ class Match:
             else:
                 self.emit("hit", point=res.point, damage=res.damage,
                           critical=res.critical, to_body=res.to_body,
-                          attacker=att, defender=dfn, punch=res.punch)
+                          attacker=att, defender=dfn, punch=res.punch,
+                          counter=res.counter)
+                if res.condition_event:
+                    self.emit(res.condition_event, fighter=dfn)
                 if res.critical:
                     self.slow_mo = max(self.slow_mo, 0.22)
+                if att.momentum.in_zone and att.momentum.zone > 4.9:
+                    self.emit("zone", fighter=att)
 
         # whiff detection: punch finished without landing
         for f in (self.player, self.opponent):

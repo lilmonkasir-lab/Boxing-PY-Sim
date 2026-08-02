@@ -48,8 +48,11 @@ python3 -m venv .venv
 | `U` / `I` | Lead hook / rear hook |
 | `O` | Uppercut |
 | `H` / `L` | Body jab / body hook |
-| `SPACE` | Block (high guard) |
+| `SPACE` | Block (hold high guard) |
+| `F` | **Parry** — tap-timed deflect, punishes the attacker |
 | `SHIFT` | Slip / duck under a head shot |
+| `Z` / `X` | Square up / blade the stance |
+| `Q` | Switch orthodox ↔ southpaw |
 | `A`+`D` mash | Beat the count when you're dropped |
 | `C` | Cycle camera (broadcast / close / corner / cinematic / overhead) |
 | `V` | Free camera (arrows orbit, wheel zooms) |
@@ -105,6 +108,41 @@ texture), recentres and rescales the model onto the ring footprint, and
 
 ---
 
+## Mechanics and skill
+
+The aim is a clear gap between mashing punches and actually boxing.
+
+**Parry (`F`).** A tap, not a hold, with a 0.18 s window and a 0.42 s cooldown
+so it can't be spammed. Time it against an incoming punch and you deflect it:
+no damage, and the attacker eats stun, loses their combo and drops momentum.
+Earlier in the window scores a cleaner parry.
+
+**Counters.** Landing inside the opponent's recovery frames scores up to
+**1.85× damage**. Punish a whiff instead of trading and the fight changes shape.
+
+**Stance (`Z`/`X`, `Q`).** Bladed is longer and harder to hit; squared is
+shorter but hits ~14% harder and moves better. Orthodox/southpaw switches your
+lead hand. There is no dominant setting — it's a live trade.
+
+**Momentum.** Clean work fills a meter under your health bar; getting hit
+drains it. Fill it and you enter **the zone**: +28% power, +20% speed, for five
+seconds. Easy to lose, so it punishes greed.
+
+**Lasting damage.** Cuts, swelling and deep fatigue persist across the whole
+fight, unlike health. Swelling narrows your evasion, deep fatigue permanently
+lowers your stamina ceiling. Your corner patches some of it between rounds, so
+round ten plays nothing like round one.
+
+**Combos.** Sustained pressure scales damage up to 1.45× and names itself
+(DOUBLE → TRIPLE → BLISTERING → UNANSWERED).
+
+**A smarter opponent.** The AI now parries, counters your recovery frames,
+adapts its stance to how the fight is going, and *reads your habits* — hide
+behind a high guard and it starts going to the body. `parry`, `counter` and
+`adapt` scale across the four difficulties.
+
+---
+
 ## How the 3D works
 
 There is no GPU involved. `boxing_sim/engine/renderer.py` implements a
@@ -135,8 +173,14 @@ first and depth second, which eliminates that whole artefact class.
 per-side panels and grid tiles rather than single boxes, so each centroid sits
 where its geometry actually is.
 
-Camera work borrows from TV boxing: the rope run and corner post between the
-camera and the fighters are culled, so the action is never hidden behind a
+**Lighting.** A three-point rig (hard overhead key, cool fill, warm back light)
+plus hemispheric ambient, with Blinn-Phong specular driven by per-mesh
+materials — glossy leather gloves, matte canvas, soft skin, bright metal posts.
+Highlights roll off through a Reinhard-style tone map instead of clipping to
+white. Screen-space bloom and a vignette finish the frame.
+
+Camera work borrows from TV boxing: every rope run and corner post between the
+camera and the fighters is culled, so the action is never hidden behind a
 white bar.
 
 ---
@@ -172,21 +216,21 @@ swells), so there are no audio files either.
 play.py       one-command launcher (sets up .venv, then plays)
 main.py       direct entry point, if deps are already installed
 boxing_sim/
-  engine/     math3d · mesh · primitives · camera · renderer · objloader
-  game/       arena · fighter · combat · ai · match · hud · effects · audio
+  engine/     math3d · mesh · primitives · camera · renderer · lighting · postfx · objloader
+  game/       arena · fighter · combat · skills · ai · match · hud · effects · audio
   app.py      window, input, camera direction, main loop
 assets/models/  boxing_ring + boxer .obj/.mtl
 tools/
   headless_check.py    scripted bot + screenshots, no display needed
   calibrate_reach.py   regenerate the punch reach table
   export_models.py     regenerate the .obj/.mtl assets
-tests/                 57 tests
+tests/                 77 tests
 ```
 
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q                          # 57 tests
+.venv/bin/python -m pytest tests -q                          # 77 tests
 .venv/bin/python tools/headless_check.py --seconds 20 --shots 4
 .venv/bin/python tools/calibrate_reach.py    # after changing the rig
 .venv/bin/python tools/export_models.py      # after changing the geometry
@@ -196,6 +240,8 @@ The tests lock down the bugs actually hit while building this: punches that
 couldn't reach, AI ranges disagreeing with hit detection, oversized polygons
 reaching SDL, layer-vs-depth sorting, rounds judged on cumulative rather than
 per-round damage, and shipped models silently overriding the live ring.
+The skill systems (parry windows, counter bonuses, stance trade-offs, momentum,
+lasting damage) each have their own tests, as does the lighting rig.
 
 ## Credits
 

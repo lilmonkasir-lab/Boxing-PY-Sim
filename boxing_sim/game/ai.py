@@ -33,10 +33,16 @@ COMBOS = [
 ]
 
 DIFFICULTIES = {
-    "Amateur":   dict(react=0.36, aggro=0.42, block=0.32, slip=0.10, combo=0.35, err=0.32),
-    "Contender": dict(react=0.24, aggro=0.58, block=0.50, slip=0.22, combo=0.55, err=0.20),
-    "Champion":  dict(react=0.15, aggro=0.72, block=0.66, slip=0.34, combo=0.75, err=0.10),
-    "Legend":    dict(react=0.09, aggro=0.85, block=0.80, slip=0.48, combo=0.92, err=0.04),
+    # parry / counter are the "skill" dials: higher tiers read your rhythm and
+    # punish recovery frames instead of just trading.
+    "Amateur":   dict(react=0.36, aggro=0.42, block=0.32, slip=0.10, combo=0.35,
+                      err=0.32, parry=0.02, counter=0.10, adapt=0.10),
+    "Contender": dict(react=0.24, aggro=0.58, block=0.50, slip=0.22, combo=0.55,
+                      err=0.20, parry=0.10, counter=0.30, adapt=0.35),
+    "Champion":  dict(react=0.15, aggro=0.72, block=0.66, slip=0.34, combo=0.75,
+                      err=0.10, parry=0.22, counter=0.55, adapt=0.65),
+    "Legend":    dict(react=0.09, aggro=0.85, block=0.80, slip=0.48, combo=0.92,
+                      err=0.04, parry=0.36, counter=0.80, adapt=0.90),
 }
 
 
@@ -54,8 +60,14 @@ class BoxerAI:
         self.circle_dir = self.rng.choice((-1.0, 1.0))
         self.want_block = False
         self.want_duck = False
+        self.want_parry = False
         self.move = (0.0, 0.0)
         self.pressure = 0.5
+        # reads the player's habits: which punches they favour, how often they
+        # guard.  Feeds `adapt`, so higher tiers start countering your pattern.
+        self.seen_punches: dict[str, int] = {}
+        self.seen_guard = 0.0
+        self.seen_frames = 0.0
 
     # ------------------------------------------------------------------
     def _set_state(self, s: str):
@@ -63,8 +75,28 @@ class BoxerAI:
             self.state = s
             self.state_t = 0.0
 
+    def observe(self, opp: Fighter, dt: float) -> None:
+        """Build a picture of the player's habits (used by `adapt`)."""
+        self.seen_frames += dt
+        if opp.block:
+            self.seen_guard += dt
+        if opp.punch.active and opp.punch.t < 1e-3:
+            self.seen_punches[opp.punch.key] = self.seen_punches.get(opp.punch.key, 0) + 1
+
+    @property
+    def guard_rate(self) -> float:
+        """Fraction of observed time the opponent spent behind a high guard.
+
+        Needs a little evidence before it means anything, so it reads 0 for
+        the first second rather than swinging wildly off two frames.
+        """
+        if self.seen_frames < 1.0:
+            return 0.0
+        return self.seen_guard / self.seen_frames
+
     def update(self, dt: float, opp: Fighter, arena):
         f = self.f
+        self.observe(opp, dt)
         self.state_t += dt
         self.think_t -= dt
         self.queue_gap -= dt
@@ -93,12 +125,16 @@ class BoxerAI:
 
         self.want_block = False
         self.want_duck = False
+        self.want_parry = False
         if threat > 0.4 and dist < 2.4:
             r = self.rng.random()
-            if r < p["slip"] and not incoming_body and f.dodge_cool <= 0.0:
+            # a parry is the highest-skill answer, so it is gated hardest
+            if r < p["parry"] and f.parry.ready and not incoming_body:
+                self.want_parry = True
+            elif r < p["parry"] + p["slip"] and not incoming_body and f.dodge_cool <= 0.0:
                 self.want_duck = True
                 f.dodge_cool = 0.55
-            elif r < p["slip"] + p["block"]:
+            elif r < p["parry"] + p["slip"] + p["block"]:
                 self.want_block = True
 
         # low stamina / hurt -> turtle up more
@@ -165,12 +201,19 @@ class BoxerAI:
                 self.queue = list(combo)
                 self.queue_gap = self.rng.uniform(0.0, 0.12)
 
-        # counter-punch window: opponent just whiffed
+        # counter-punch window: punish the opponent's recovery frames
         if (not self.queue and opp.punch.active and not f.punch.active
-                and dist < 1.4 and self.rng.random() < p["combo"] * dt * 9.0):
+                and dist < 1.4 and self.rng.random() < p["counter"] * dt * 14.0):
             phase, u = opp.punch_phase()
-            if phase == "recover":
+            if phase == "recover" and u < 0.5:
                 self.queue = ["cross"] if self.rng.random() < 0.6 else ["lead_hook"]
+
+        # adapt the stance to how the fight is going
+        if self.rng.random() < p["adapt"] * dt * 0.6:
+            if f.health < opp.health * 0.7:
+                f.stance.nudge(0.10)      # hurt -> tighten up, longer range
+            elif opp.health < 45.0:
+                f.stance.nudge(-0.12)     # smell blood -> square up for power
 
     # ------------------------------------------------------------------
     def _pick_combo(self, dist: float, opp: Fighter):
@@ -180,6 +223,9 @@ class BoxerAI:
         elif dist < 0.85:
             pool = [c for c in COMBOS if any(k in ("uppercut", "lead_hook", "rear_hook",
                                                    "body_hook") for k in c)] or COMBOS
+        # if they hide behind a high guard, go downstairs
+        if self.guard_rate > 0.35 and self.rng.random() < self.p["adapt"]:
+            pool = [c for c in COMBOS if any("body" in k for k in c)] or pool
         combo = list(self.rng.choice(pool))
         maxlen = 1 + int(self.p["combo"] * 3.2)
         if opp.block and self.rng.random() < 0.5:

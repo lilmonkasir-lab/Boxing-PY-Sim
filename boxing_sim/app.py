@@ -11,6 +11,7 @@ import pygame
 
 from .engine import math3d as m3
 from .engine.camera import Camera
+from .engine.postfx import PostFX
 from .engine.renderer import Renderer
 from .game.arena import RING_HALF, build_arena
 from .game.audio import Audio
@@ -52,6 +53,7 @@ class Game:
 
         self.camera = Camera(self.buf.get_width(), self.buf.get_height(), 56.0)
         self.renderer = Renderer(self.buf, self.camera)
+        self.postfx = PostFX(self.buf.get_size(), quality)
         self.hud = HUD(self.width, self.height)
         self.audio = Audio(enabled=not no_audio)
         self.particles = Particles()
@@ -82,6 +84,8 @@ class Game:
         self.show_debug = False
         self.mash_edge = False
         self._mash_prev = False
+        self._parry_prev = False
+        self._stance_edge = False
         self.running = True
         self.time = 0.0
         self.hitstop = 0.0
@@ -129,6 +133,7 @@ class Game:
                 self._make_buffer()
                 self.camera.resize(self.buf.get_width(), self.buf.get_height())
                 self.renderer.resize(self.buf)
+                self.postfx.resize(self.buf.get_size())
                 self.hud.resize(e.w, e.h)
             elif e.type == pygame.KEYDOWN:
                 self._keydown(e)
@@ -139,6 +144,8 @@ class Game:
         k = e.key
         if k == pygame.K_ESCAPE:
             self.running = False
+        elif k == pygame.K_q:
+            self._stance_edge = True
         elif k == pygame.K_p:
             self.paused = not self.paused
         elif k == pygame.K_c:
@@ -159,6 +166,8 @@ class Game:
             self._make_buffer()
             self.camera.resize(self.buf.get_width(), self.buf.get_height())
             self.renderer.resize(self.buf)
+            self.postfx.set_quality(self.quality)
+            self.postfx.resize(self.buf.get_size())
             self.hud.add_toast(f"quality: {self.quality}", life=1.2)
         elif k in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.match.state == "over":
             self.match = self._new_match()
@@ -171,6 +180,15 @@ class Game:
         mz = (1.0 if keys[pygame.K_w] else 0.0) - (1.0 if keys[pygame.K_s] else 0.0)
         block = keys[pygame.K_SPACE]
         duck = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        # parry is an edge-triggered tap, not a hold - that is the whole point
+        parry_key = keys[pygame.K_f]
+        parry = parry_key and not self._parry_prev
+        self._parry_prev = parry_key
+        nudge = 0.0
+        if keys[pygame.K_z]:
+            nudge = -1.6 * (1 / 60.0)
+        elif keys[pygame.K_x]:
+            nudge = 1.6 * (1 / 60.0)
         punches = []
         for key, name in PUNCH_KEYS.items():
             if keys[key]:
@@ -182,7 +200,11 @@ class Game:
         if cur and not self._mash_prev:
             mash = True
         self._mash_prev = cur
-        return dict(move=(mx, mz), block=block, duck=duck, punches=punches, mash=mash)
+        stance_toggle = self._stance_edge
+        self._stance_edge = False
+        return dict(move=(mx, mz), block=block, duck=duck, punches=punches,
+                    mash=mash, parry=parry, stance_toggle=stance_toggle,
+                    stance_nudge=nudge)
 
     # ------------------------------------------------------------------
     def update_camera(self, dt):
@@ -285,7 +307,10 @@ class Game:
                                 0.6 + 0.4 * min(1.0, ev["damage"] / 18.0))
                 col = (255, 215, 110) if big else (255, 255, 255)
                 label = f"{int(ev['damage'])}"
-                if ev["critical"]:
+                if ev.get("counter"):
+                    col = (255, 140, 210)
+                    label = "COUNTER " + label
+                elif ev["critical"]:
                     label += "!"
                 self.floaters.add(pt + m3.vec3(0, 0.25, 0), label, col,
                                   size=1.3 if big else 1.0)
@@ -296,6 +321,30 @@ class Game:
                 self.audio.play("block", 0.5)
                 self.camera.add_shake(0.05)
                 self.floaters.add(ev["point"], "BLOCK", (150, 200, 255), size=0.75, life=0.55)
+            elif kind == "parry":
+                pt = ev["point"]
+                self.particles.spawn(pt, 14, 4.6, (190, 226, 255), 5.0, 0.34, 5.0)
+                self.audio.play("block", 0.85)
+                self.camera.add_shake(0.14)
+                self.hitstop = 0.06
+                self.floaters.add(pt + m3.vec3(0, 0.25, 0), "PARRY!",
+                                  (150, 220, 255), size=1.25, life=0.85)
+                self.hud.add_toast("Parry - opening!", (150, 220, 255), 1.2)
+            elif kind == "zone":
+                f = ev["fighter"]
+                self.hud.say("IN THE ZONE", f.stats.name, 1.4)
+                self.audio.play("roar", 0.8)
+            elif kind == "cut":
+                f = ev["fighter"]
+                msg = "You are cut!" if f.is_player else f"{f.stats.name} is cut!"
+                self.hud.add_toast(msg, (230, 70, 70), 2.2)
+            elif kind == "swelling":
+                f = ev["fighter"]
+                msg = ("Your eye is closing" if f.is_player
+                       else f"{f.stats.name}'s eye is closing")
+                self.hud.add_toast(msg, (230, 150, 70), 2.2)
+            elif kind == "stance":
+                self.hud.add_toast(ev["text"], (200, 210, 240), 1.2)
             elif kind == "slip":
                 self.floaters.add(ev["point"] + m3.vec3(0, 0.3, 0), "SLIP",
                                   (170, 255, 190), size=0.8, life=0.6)
@@ -368,6 +417,8 @@ class Game:
         self.arena.submit_ropes(r, self.camera, mid)
         r.render()
         self.particles.draw(r, buf)
+        # bloom/vignette belong to the 3D image, so they run before the HUD
+        self.postfx.apply(buf)
         self.floaters.draw(r, buf, self.hud.f_float)
 
         # blit the render buffer up to the window

@@ -20,6 +20,7 @@ import numpy as np
 import pygame
 
 from . import math3d as m3
+from .lighting import LightRig
 from .mesh import Mesh
 
 
@@ -53,10 +54,13 @@ class Renderer:
     def __init__(self, surface: pygame.Surface, camera):
         self.surface = surface
         self.camera = camera
+        self.rig = LightRig.arena()
+        # legacy single-light knobs, kept so existing code/tests keep working
         self.light_dir = m3.normalize(m3.vec3(-0.45, -1.0, -0.35))
         self.ambient = 0.42
         self.diffuse = 0.72
-        self.rim = 0.16
+        self.rim = 0.20
+        self.tone_map = True
         self.fog_color = np.array([16.0, 14.0, 26.0], dtype=np.float32)
         self.fog_start = 16.0
         self.fog_end = 90.0
@@ -111,9 +115,11 @@ class Renderer:
             cols.append(col)
             biases.append(np.full(len(a), it.sort_bias, np.float32))
             layers.append(np.full(len(a), it.layer, np.float32))
-            fl = np.zeros((len(a), 2), np.float32)
+            fl = np.zeros((len(a), 4), np.float32)
             fl[:, 0] = 1.0 if mesh.double_sided else 0.0
             fl[:, 1] = 1.0 if mesh.unlit else 0.0
+            fl[:, 2] = getattr(mesh, "spec", 0.0)
+            fl[:, 3] = getattr(mesh, "shine", 1.0)
             flags.append(fl)
         if not tri_a:
             return None
@@ -132,6 +138,14 @@ class Renderer:
         za, zb, zc = a[:, 2], b[:, 2], c[:, 2]
         ia, ib, ic = za <= -near, zb <= -near, zc <= -near
         n_in = ia.astype(np.int8) + ib.astype(np.int8) + ic.astype(np.int8)
+
+        partial_any = ((n_in == 1) | (n_in == 2)).any()
+        if not partial_any:
+            # overwhelmingly the common case: nothing crosses the near plane,
+            # so skip the python re-triangulation loop altogether
+            full = n_in == 3
+            return (a[full], b[full], c[full], col[full], bias[full],
+                    flags[full], layer[full])
 
         full = n_in == 3
         out_a, out_b, out_c = [a[full]], [b[full]], [c[full]]
@@ -247,16 +261,35 @@ class Renderer:
         n[flip] *= -1.0
 
         # --- shading ----------------------------------------------------
-        ldir = m3.transform_dir(view, self.light_dir)
-        ldir = ldir / max(float(np.linalg.norm(ldir)), 1e-9)
-        ndl = np.clip(-(n @ ldir), 0.0, 1.0)
-        shade = self.ambient + self.diffuse * ndl
+        centroid = (a[idx] + b[idx] + c[idx]) / 3.0
+        spec_strength = flags[idx, 2]
+        shininess = np.maximum(flags[idx, 3], 1.0)
+
+        self.rig.prepare(view)
+        up_view = m3.transform_dir(view, m3.vec3(0.0, 1.0, 0.0))
+        up_view = up_view / max(float(np.linalg.norm(up_view)), 1e-9)
+        diffuse, specular = self.rig.shade(n, centroid, up_view,
+                                           spec_strength, shininess)
+
+        rgb = col * diffuse
+        # specular is a highlight *added* on top, not a tint of the base colour
+        rgb = rgb + specular * 255.0
+
         if self.rim > 0.0:
-            # view vector is -normalize(centroid); cheap fresnel-ish rim
-            rim = 1.0 - np.clip(np.abs(n[:, 2]), 0.0, 1.0)
-            shade = shade + self.rim * (rim ** 2)
-        shade = np.where(unlit, 1.0, shade)
-        rgb = col * shade[:, None]
+            # fresnel-ish rim: bright edge where a surface turns away from us
+            vlen = np.linalg.norm(centroid, axis=1, keepdims=True)
+            vlen[vlen < 1e-9] = 1.0
+            vdot = np.abs(np.einsum("ij,ij->i", n, -centroid / vlen))
+            rim = np.clip(1.0 - vdot, 0.0, 1.0) ** 3
+            rgb = rgb + (rim * self.rim * 190.0)[:, None]
+
+        rgb = np.where(unlit[:, None], col, rgb)
+
+        if self.tone_map:
+            # Reinhard-style roll-off: keeps the bright overhead key from
+            # flat-clipping every shoulder to pure white
+            x = np.maximum(rgb, 0.0) / 255.0
+            rgb = (x / (1.0 + x * 0.85)) * 255.0 * 1.34
 
         # --- distance fog -------------------------------------------------
         if self.fog_end > self.fog_start:

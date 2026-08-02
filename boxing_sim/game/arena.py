@@ -33,8 +33,8 @@ FLOOR_Y = 1.05           # canvas height above arena floor
 POST_H = 2.55            # post height above canvas
 ROPE_HEIGHTS = (0.46, 0.94, 1.42, 1.90)
 
-C_CANVAS = (208, 210, 216)
-C_CANVAS_ALT = (196, 198, 205)
+C_CANVAS = (142, 146, 156)
+C_CANVAS_ALT = (133, 137, 147)
 C_SKIRT = (28, 44, 96)
 C_APRON_TRIM = (196, 30, 46)
 C_POST = (208, 210, 214)
@@ -58,7 +58,7 @@ def _post_pad(x, z, color):
     parts.append(sphere(0.135, 5, 10, C_POST, (x, base_y + POST_H, z)))
     # base plate
     parts.append(box(0.36, 0.09, 0.36, C_STEEL, (x, base_y + 0.045, z)))
-    return Mesh.combine(parts, "corner")
+    return Mesh.combine(parts, "corner").with_material("metal")
 
 
 def _ropes():
@@ -92,7 +92,7 @@ def _ropes():
                 dz = (z1 - z0) * 0.055
                 parts.append(tube_between((px - dx, y, pz - dz),
                                           (px + dx, y, pz + dz), 0.050, 5, C_ROPE_RED))
-        runs[normals[i]] = Mesh.combine(parts, f"rope_run_{i}")
+        runs[normals[i]] = Mesh.combine(parts, f"rope_run_{i}").with_material("rope")
     return runs
 
 
@@ -109,14 +109,22 @@ def _canvas():
     parts = []
     o = RING_HALF + APRON
 
-    # canvas top, split into a grid so long thin tris never span the ring
-    n = 4
+    # Canvas top, split into a grid so long thin tris never span the ring.
+    # The grid is also used to bake a lighting pool into the vertex colours:
+    # the canvas faces straight up into the overhead key and would otherwise
+    # render as one flat blown-out slab that swallows the fighters.  Darkening
+    # toward the ropes reproduces the falloff of a real overhead rig and gives
+    # the eye somewhere to rest.
+    n = 8
     step = (o * 2) / n
     for i in range(n):
         for j in range(n):
             x = -o + (i + 0.5) * step
             z = -o + (j + 0.5) * step
-            c = C_CANVAS if (i + j) % 2 == 0 else C_CANVAS_ALT
+            base = C_CANVAS if (i + j) % 2 == 0 else C_CANVAS_ALT
+            r = math.hypot(x, z) / o                      # 0 centre -> 1 edge
+            fall = 1.0 - 0.50 * min(1.0, r ** 1.4)
+            c = tuple(v * fall for v in base)
             parts.append(box(step, 0.10, step, c, (x, FLOOR_Y - 0.05, z), name="canvas"))
 
     trim_y = FLOOR_Y - 0.16
@@ -151,7 +159,7 @@ def _centre_logo():
         verts.append([math.cos(a) * r, FLOOR_Y + 0.002, math.sin(a) * r])
     for i in range(1, n + 1):
         faces.append([0, i + 1, i])
-        cols.append((188, 192, 204))
+        cols.append((150, 154, 166))
     m = Mesh(np.array(verts, np.float32), np.array(faces, np.int32),
              np.array(cols, np.float32), "logo")
     return m
@@ -370,19 +378,20 @@ class Arena:
         """
         if not self.ropes:
             return
-        skip = None
+        skip = set()
         if camera is not None:
             focus = m3.vec3(0.0, FLOOR_Y, 0.0) if focus is None else focus
             view_dir = np.asarray(focus, np.float32) - np.asarray(camera.eye, np.float32)
             view_dir = m3.normalize(m3.vec3(float(view_dir[0]), 0.0, float(view_dir[2])))
-            best = 0.30   # only cull a run we are genuinely looking through
+            # A run is in the way when its outward normal opposes our view.
+            # Cull *every* such run, not just the worst one: from a corner or
+            # diagonal angle two runs face the camera at once, and culling only
+            # one still leaves a white bar across the fighters.
             for n in self.ropes:
-                # a run is in the way when its outward normal opposes our view
-                d = -(view_dir[0] * n[0] + view_dir[2] * n[1])
-                if d > best:
-                    best, skip = d, n
+                if -(view_dir[0] * n[0] + view_dir[2] * n[1]) > 0.34:
+                    skip.add(n)
         for n, mesh in self.ropes.items():
-            if n == skip:
+            if n in skip:
                 continue
             renderer.submit(mesh, self._ident,
                             layer=renderer_layers.LAYER_FOREGROUND)

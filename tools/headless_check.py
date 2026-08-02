@@ -52,8 +52,24 @@ class ScriptedGame(Game):
         strafe = math.sin(self.time * 0.7) * 0.8
         block = dist < 1.5 and rng.random() < 0.12
         duck = rng.random() < 0.03
+
+        # use the skill mechanics too, otherwise the scripted side is being
+        # measured against an opponent playing a strictly richer game
+        threat = 0.0
+        if o.punch.active:
+            phase, _u = o.punch_phase()
+            threat = 1.0 if phase == "wind" else (0.7 if phase == "strike" else 0.0)
+        parry = bool(threat > 0.5 and dist < 1.6 and p.parry.ready
+                     and rng.random() < 0.30)
+        # punish recovery frames
+        counter_now = False
+        if o.punch.active:
+            phase, u = o.punch_phase()
+            counter_now = phase == "recover" and u < 0.5 and dist < 1.3
         punches = []
         self._gap -= 1 / 60.0
+        if counter_now and not self._queue and rng.random() < 0.55:
+            self._queue = ["cross"]
         if not self._queue and dist < 1.35 and rng.random() < 0.10:
             n = rng.randint(1, 3)
             self._queue = [rng.choice(PUNCH_ORDER) for _ in range(n)]
@@ -61,7 +77,8 @@ class ScriptedGame(Game):
             punches = [self._queue.pop(0)]
             self._gap = 0.09
         return dict(move=(strafe, fwd), block=block, duck=duck, punches=punches,
-                    mash=rng.random() < 0.35)
+                    mash=rng.random() < 0.35, parry=parry,
+                    stance_toggle=False, stance_nudge=0.0)
 
 
 def main():

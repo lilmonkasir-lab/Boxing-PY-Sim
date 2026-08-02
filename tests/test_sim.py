@@ -277,22 +277,37 @@ def test_fighters_do_not_occupy_the_same_space():
 # combat rules
 # ---------------------------------------------------------------------------
 def test_blocking_reduces_damage_taken():
+    """Controlled trial: identical punches, only the guard differs.
+
+    Positions are reset before every punch - otherwise recoil walks the
+    defender out of range and both runs land the same couple of shots, which
+    masks the mechanic being tested.
+    """
     import random
 
     def run(block: bool) -> float:
-        f = Fighter(FighterStats(power=3.0), m3.vec3(0, 1.05, 0), 0.0, True)
-        o = Fighter(FighterStats(), m3.vec3(0, 1.05, 1.0), math.pi, False)
-        rng = random.Random(1)
         arena = _FlatArena()
-        for _ in range(14):
+        f = Fighter(FighterStats(power=1.0), m3.vec3(0, 1.05, 0), 0.0, True)
+        o = Fighter(FighterStats(chin=1.0), m3.vec3(0, 1.05, 1.0), math.pi, False)
+        rng = random.Random(1)
+        o.health = 1e6                      # measure damage, not knockdowns
+        for _ in range(40):
+            f.pos = m3.vec3(0, 1.05, 0)
+            o.pos = m3.vec3(0, 1.05, 1.0)
+            f.facing, o.facing = 0.0, math.pi
+            f.stun = o.stun = 0.0
+            f.stamina = f.stats.stamina_max
+            o.guard_break = 0.0             # isolate the guard, not its decay
             f.try_punch("cross")
             while f.punch.active:
                 f.update(1 / 240.0, o, arena, (0, 0), False, False)
                 o.update(1 / 240.0, f, arena, (0, 0), block, False)
                 resolve_punch(f, o, rng)
-        return 100.0 - o.health
+        return 1e6 - o.health
 
-    assert run(block=True) < run(block=False) * 0.8
+    guarded, open_guard = run(block=True), run(block=False)
+    assert guarded < open_guard * 0.6, (
+        f"guard barely helped: {guarded:.0f} vs {open_guard:.0f}")
 
 
 def test_knockdown_when_health_is_exhausted():
@@ -415,10 +430,22 @@ def test_rope_run_facing_the_camera_is_culled():
     a = build_arena(crowd=False)
     r, _ = _renderer()
     r.begin()
-    r.camera.eye = m3.vec3(0.0, 2.0, 14.0)     # looking from +Z
+    r.camera.eye = m3.vec3(0.0, 2.0, 14.0)     # square on, from +Z
     r.camera.target = m3.vec3(0.0, 1.4, 0.0)
     a.submit_ropes(r, r.camera, m3.vec3(0, 1.05, 0))
     assert len(r._items) == 3, "the near rope run should have been skipped"
+
+
+def test_diagonal_view_culls_both_obstructing_rope_runs():
+    """Regression: from a corner, two runs face the camera.  Culling only the
+    worst one still left a rope across the fighters."""
+    a = build_arena(crowd=False)
+    r, _ = _renderer()
+    r.begin()
+    r.camera.eye = m3.vec3(11.0, 3.0, 11.0)    # diagonal, over a corner
+    r.camera.target = m3.vec3(0.0, 1.4, 0.0)
+    a.submit_ropes(r, r.camera, m3.vec3(0, 1.05, 0))
+    assert len(r._items) == 2, "both near runs should have been skipped"
 
 
 def test_all_four_rope_runs_draw_without_a_camera():
@@ -572,3 +599,241 @@ def test_export_round_trips_without_losing_geometry(tmp_path):
     back = load_obj(out)
     assert back.tri_count == src.tri_count
     assert np.allclose(np.sort(back.verts, axis=0), np.sort(src.verts, axis=0), atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# skill mechanics
+# ---------------------------------------------------------------------------
+def test_parry_window_opens_and_expires():
+    from boxing_sim.game.skills import ParryWindow
+    w = ParryWindow()
+    assert w.trigger() and w.active
+    assert w.quality() > 0.9, "a fresh parry should be near-perfect"
+    w.update(w.DURATION * 0.9)
+    assert 0.0 < w.quality() < 0.6, "quality should decay across the window"
+    w.update(w.DURATION)
+    assert not w.active
+
+
+def test_parry_cannot_be_spammed():
+    from boxing_sim.game.skills import ParryWindow
+    w = ParryWindow()
+    assert w.trigger()
+    w.update(w.DURATION + 0.01)
+    assert not w.trigger(), "still cooling down"
+    w.update(w.COOLDOWN)
+    assert w.trigger(), "should be usable again after the cooldown"
+
+
+def test_parry_deflects_a_punch_and_punishes_the_attacker():
+    import random
+    arena = _FlatArena()
+    f = Fighter(FighterStats(power=2.0), m3.vec3(0, 1.05, 0), 0.0, True)
+    o = Fighter(FighterStats(), m3.vec3(0, 1.05, 1.0), math.pi, False)
+    rng = random.Random(3)
+    f.try_punch("cross")
+    o.parry.trigger()
+    result = None
+    for _ in range(400):
+        f.update(1 / 240.0, o, arena, (0, 0), False, False)
+        o.update(1 / 240.0, f, arena, (0, 0), False, False)
+        r = resolve_punch(f, o, rng)
+        if r is not None:
+            result = r
+            break
+    assert result is not None and result.parried
+    assert o.health == 100.0, "a parried punch must not do damage"
+    assert f.stun > 0.0, "the attacker should be punished for a parried shot"
+    assert o.parries_landed == 1
+
+
+def test_counter_window_rewards_hitting_during_recovery():
+    from boxing_sim.game.skills import CounterWindow
+    f = Fighter(FighterStats(), m3.vec3(0, 1.05, 0), 0.0, True)
+    assert CounterWindow.bonus_against(f) == 1.0, "idle target is not a counter"
+
+    f.try_punch("cross")
+    p = PUNCHES["cross"]
+    span = p.wind + p.strike + p.recover
+    # step into the recovery phase
+    f.punch.t = f.punch.total * ((p.wind + p.strike + p.recover * 0.05) / span)
+    assert f.punch_phase()[0] == "recover"
+    assert CounterWindow.bonus_against(f) > 1.5
+    assert CounterWindow.is_counter(f)
+
+
+def test_stance_trades_reach_against_power():
+    from boxing_sim.game.skills import Stance
+    bladed, square = Stance(bladed=1.0), Stance(bladed=0.0)
+    assert bladed.reach_mult > square.reach_mult
+    assert square.power_mult > bladed.power_mult
+    assert square.move_speed_mult > bladed.move_speed_mult
+    assert bladed.evasion > square.evasion
+
+
+def test_stance_changes_a_fighters_effective_stats():
+    f = Fighter(FighterStats(), m3.vec3(0, 1.05, 0), 0.0, True)
+    f.stance.bladed = 1.0
+    long_reach, low_power = f.effective_reach, f.effective_power
+    f.stance.bladed = 0.0
+    assert f.effective_reach < long_reach
+    assert f.effective_power > low_power
+
+
+def test_momentum_fills_then_triggers_the_zone():
+    from boxing_sim.game.skills import Momentum
+    m = Momentum()
+    assert m.power_mult == 1.0
+    tipped = False
+    for _ in range(40):
+        if m.add(0.10):
+            tipped = True
+            break
+    assert tipped and m.in_zone
+    assert m.power_mult > 1.0 and m.speed_mult > 1.0
+    m.update(m.ZONE_TIME + 0.1)
+    assert not m.in_zone
+
+
+def test_taking_damage_drains_momentum():
+    from boxing_sim.game.skills import Momentum
+    m = Momentum()
+    m.add(0.5)
+    before = m.value
+    m.drain(0.3)
+    assert m.value < before
+
+
+def test_conditioning_accumulates_and_limits_stamina():
+    import random
+    from boxing_sim.game.skills import Conditioning
+    c = Conditioning()
+    rng = random.Random(0)
+    assert c.stamina_ceiling == 1.0
+    for _ in range(40):
+        c.take(16.0, to_head=True, rng=rng)
+    assert c.cut > 0.0, "heavy head damage should open a cut"
+    assert c.deep_fatigue > 0.0
+    assert c.stamina_ceiling < 1.0, "deep fatigue must cap stamina"
+    assert c.evasion_penalty >= 0.0
+
+
+def test_corner_work_heals_between_rounds():
+    import random
+    from boxing_sim.game.skills import Conditioning
+    c = Conditioning()
+    rng = random.Random(0)
+    for _ in range(30):
+        c.take(16.0, to_head=True, rng=rng)
+    cut, swell = c.cut, c.swelling
+    c.round_recovery()
+    assert c.cut < cut or cut == 0.0
+    assert c.swelling <= swell
+
+
+def test_deep_fatigue_lowers_the_reachable_stamina():
+    f = Fighter(FighterStats(), m3.vec3(0, 1.05, 0), 0.0, True)
+    full = f.stamina_max_now
+    f.condition.deep_fatigue = 0.8
+    assert f.stamina_max_now < full
+
+
+def test_combo_multiplier_scales_but_is_capped():
+    from boxing_sim.game.skills import combo_multiplier
+    assert combo_multiplier(1) == pytest.approx(1.0)
+    assert combo_multiplier(4) > combo_multiplier(2)
+    assert combo_multiplier(50) <= 1.45, "combo damage must not run away"
+
+
+def test_ai_difficulties_scale_the_skill_dials():
+    from boxing_sim.game.ai import DIFFICULTIES
+    order = ["Amateur", "Contender", "Champion", "Legend"]
+    for dial in ("parry", "counter", "adapt", "block"):
+        vals = [DIFFICULTIES[d][dial] for d in order]
+        assert vals == sorted(vals), f"{dial} should rise with difficulty"
+    # reactions should get *faster*
+    react = [DIFFICULTIES[d]["react"] for d in order]
+    assert react == sorted(react, reverse=True)
+
+
+def test_ai_observes_the_players_guard_habit():
+    from boxing_sim.game.ai import BoxerAI
+    arena = build_arena(crowd=False)
+    f = Fighter(FighterStats(), m3.vec3(0, 1.05, 0), 0.0, False)
+    opp = Fighter(FighterStats(), m3.vec3(0, 1.05, 1.2), math.pi, True)
+    ai = BoxerAI(f, "Champion", seed=1)
+    opp.block = True
+    for _ in range(120):
+        ai.observe(opp, 1 / 60.0)
+    assert ai.guard_rate > 0.8, "AI should notice a permanently high guard"
+
+
+# ---------------------------------------------------------------------------
+# graphics
+# ---------------------------------------------------------------------------
+def test_light_rig_produces_directional_shading():
+    from boxing_sim.engine.lighting import LightRig
+    rig = LightRig.arena()
+    view = m3.look_at((0, 3, 9), (0, 1.4, 0))
+    rig.prepare(view)
+    up = m3.transform_dir(view, m3.vec3(0, 1, 0))
+    up = up / np.linalg.norm(up)
+
+    up_n = (up / np.linalg.norm(up))[None, :].astype(np.float32)
+    down_n = -up_n
+    c = np.array([[0.0, 0.0, -8.0]], np.float32)
+    zero, one = np.zeros(1, np.float32), np.ones(1, np.float32)
+    lit, _ = rig.shade(up_n, c, up, zero, one)
+    dark, _ = rig.shade(down_n, c, up, zero, one)
+    assert lit.mean() > dark.mean() * 1.5, "the overhead key must light upward faces"
+
+
+def test_specular_only_applies_to_glossy_materials():
+    from boxing_sim.engine.lighting import LightRig
+    rig = LightRig.arena()
+    view = m3.look_at((0, 2, 6), (0, 1, 0))
+    rig.prepare(view)
+    up = m3.transform_dir(view, m3.vec3(0, 1, 0))
+    up = up / np.linalg.norm(up)
+    n = np.array([[0.0, 0.0, 1.0]], np.float32)
+    c = np.array([[0.0, 0.0, -5.0]], np.float32)
+    shine = np.full(1, 32.0, np.float32)
+
+    _, matte = rig.shade(n, c, up, np.zeros(1, np.float32), shine)
+    _, gloss = rig.shade(n, c, up, np.full(1, 0.8, np.float32), shine)
+    assert matte.sum() == pytest.approx(0.0, abs=1e-6)
+    assert gloss.sum() >= 0.0
+
+
+def test_materials_survive_mesh_operations():
+    from boxing_sim.engine.mesh import MATERIALS, Mesh
+    m = box(1, 1, 1).with_material("leather")
+    spec, shine = MATERIALS["leather"]
+    for variant in (m.copy(), m.translated(1, 2, 3), m.tinted(0.5),
+                    m.transform(m3.rot_y(0.4)), Mesh.combine([m, m])):
+        assert variant.spec == pytest.approx(spec)
+        assert variant.shine == pytest.approx(shine)
+
+
+def test_postfx_runs_and_darkens_the_corners():
+    import pygame
+    from boxing_sim.engine.postfx import PostFX
+    pygame.init()
+    pygame.display.set_mode((64, 64))
+    surf = pygame.Surface((320, 180)).convert()
+    surf.fill((150, 150, 150))
+    fx = PostFX(surf.get_size())
+    fx.bloom_strength = 0.0          # isolate the vignette
+    fx.apply(surf)
+    centre = surf.get_at((160, 90))
+    corner = surf.get_at((3, 3))
+    assert corner.r < centre.r, "vignette should darken the corners"
+
+
+def test_renderer_still_draws_with_the_new_pipeline():
+    r, surf = _renderer()
+    r.begin()
+    r.submit(box(2, 2, 2, color=(220, 60, 60), center=(0, 1.5, 0))
+             .with_material("leather"))
+    assert r.render() > 0
+    assert np.array(surf.get_view("3"), copy=True).sum() > 0

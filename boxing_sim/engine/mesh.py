@@ -14,11 +14,26 @@ from __future__ import annotations
 import numpy as np
 
 
+#: Surface finishes.  (specular strength, shininess exponent)
+#: These drive the Blinn-Phong term in the renderer, and are what makes
+#: gloves read as glossy leather next to matte canvas and soft skin.
+MATERIALS = {
+    "matte":   (0.00, 1.0),     # canvas, crowd, concrete
+    "skin":    (0.16, 12.0),    # soft sheen, broadens as fighters sweat
+    "leather": (0.55, 34.0),    # gloves, turnbuckle pads
+    "satin":   (0.34, 20.0),    # trunks
+    "metal":   (0.72, 58.0),    # posts, truss, ring frame
+    "rope":    (0.20, 14.0),
+}
+
+
 class Mesh:
-    __slots__ = ("verts", "faces", "colors", "name", "double_sided", "unlit")
+    __slots__ = ("verts", "faces", "colors", "name", "double_sided", "unlit",
+                 "spec", "shine")
 
     def __init__(self, verts, faces, colors=None, name: str = "mesh",
-                 double_sided: bool = False, unlit: bool = False):
+                 double_sided: bool = False, unlit: bool = False,
+                 material: str = "matte"):
         self.verts = np.asarray(verts, dtype=np.float32).reshape(-1, 3)
         self.faces = np.asarray(faces, dtype=np.int32).reshape(-1, 3)
         if colors is None:
@@ -30,6 +45,9 @@ class Mesh:
         self.name = name
         self.double_sided = double_sided
         self.unlit = unlit
+        spec, shine = MATERIALS.get(material, MATERIALS["matte"])
+        self.spec = float(spec)
+        self.shine = float(shine)
 
     # ------------------------------------------------------------------
     @property
@@ -37,8 +55,19 @@ class Mesh:
         return len(self.faces)
 
     def copy(self) -> "Mesh":
-        return Mesh(self.verts.copy(), self.faces.copy(), self.colors.copy(),
-                    self.name, self.double_sided, self.unlit)
+        return self._like(self.verts.copy(), self.faces.copy(), self.colors.copy())
+
+    def _like(self, verts, faces, colors) -> "Mesh":
+        """A new mesh carrying this one's name, flags and surface finish."""
+        m = Mesh(verts, faces, colors, self.name, self.double_sided, self.unlit)
+        m.spec, m.shine = self.spec, self.shine
+        return m
+
+    def with_material(self, material: str) -> "Mesh":
+        m = self.copy()
+        spec, shine = MATERIALS.get(material, MATERIALS["matte"])
+        m.spec, m.shine = float(spec), float(shine)
+        return m
 
     def transform(self, mat: np.ndarray) -> "Mesh":
         """Return a copy baked through a 4x4 matrix."""
@@ -47,13 +76,11 @@ class Mesh:
         faces = self.faces
         if det < 0:  # mirrored -> flip winding so normals stay outward
             faces = faces[:, ::-1].copy()
-        return Mesh(v, faces, self.colors.copy(), self.name,
-                    self.double_sided, self.unlit)
+        return self._like(v, faces, self.colors.copy())
 
     def translated(self, x, y, z) -> "Mesh":
         v = self.verts + np.array([x, y, z], dtype=np.float32)
-        return Mesh(v, self.faces.copy(), self.colors.copy(), self.name,
-                    self.double_sided, self.unlit)
+        return self._like(v, self.faces.copy(), self.colors.copy())
 
     def tinted(self, factor: float) -> "Mesh":
         m = self.copy()
@@ -85,8 +112,7 @@ class Mesh:
             return self.copy()
         s = target_x / span
         v = self.verts * s
-        return Mesh(v, self.faces.copy(), self.colors.copy(), self.name,
-                    self.double_sided, self.unlit)
+        return self._like(v, self.faces.copy(), self.colors.copy())
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -102,10 +128,12 @@ class Mesh:
             faces.append(m.faces + off)
             colors.append(m.colors)
             off += len(m.verts)
-        return Mesh(np.concatenate(verts), np.concatenate(faces),
-                    np.concatenate(colors), name,
-                    double_sided=meshes[0].double_sided,
-                    unlit=meshes[0].unlit)
+        out = Mesh(np.concatenate(verts), np.concatenate(faces),
+                   np.concatenate(colors), name,
+                   double_sided=meshes[0].double_sided,
+                   unlit=meshes[0].unlit)
+        out.spec, out.shine = meshes[0].spec, meshes[0].shine
+        return out
 
     # ------------------------------------------------------------------
     def decimate(self, max_tris: int, grid: int = 96) -> "Mesh":
@@ -139,7 +167,7 @@ class Mesh:
             keep = (nf[:, 0] != nf[:, 1]) & (nf[:, 1] != nf[:, 2]) & (nf[:, 0] != nf[:, 2])
             nf = nf[keep]
             ncol = self.colors[keep]
-            best = Mesh(newverts, nf, ncol, self.name, self.double_sided, self.unlit)
+            best = self._like(newverts, nf, ncol)
             if len(nf) <= max_tris:
                 break
             g = max(4, int(g * 0.72))

@@ -493,3 +493,82 @@ def test_missing_model_dir_falls_back_to_the_procedural_ring():
     assert a.external_path is None
     assert a.platform.tri_count > 0
     assert len(a.ropes) == 4
+
+
+# ---------------------------------------------------------------------------
+# shipped model files
+# ---------------------------------------------------------------------------
+_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "assets", "models")
+
+
+@pytest.mark.parametrize("name", ["boxing_ring", "boxer"])
+def test_shipped_models_exist_and_load(name):
+    """The repo ships real .obj/.mtl assets - they must stay loadable."""
+    from boxing_sim.engine.objloader import load_obj
+    obj = os.path.join(_MODEL_DIR, f"{name}.obj")
+    mtl = os.path.join(_MODEL_DIR, f"{name}.mtl")
+    assert os.path.isfile(obj), f"{name}.obj missing - run tools/export_models.py"
+    assert os.path.isfile(mtl), f"{name}.mtl missing - run tools/export_models.py"
+
+    mesh = load_obj(obj)
+    assert mesh.tri_count > 500
+    assert mesh.faces.max() < len(mesh.verts)
+    assert mesh.faces.min() >= 0
+    assert np.isfinite(mesh.verts).all()
+    # colours came from the .mtl, so there should be several distinct materials
+    assert len(np.unique(mesh.colors, axis=0)) > 1
+
+
+def test_shipped_models_have_sane_real_world_scale():
+    from boxing_sim.engine.objloader import load_obj
+    ring = load_obj(os.path.join(_MODEL_DIR, "boxing_ring.obj"))
+    lo, hi = ring.bounds()
+    assert 9.0 < float(hi[0] - lo[0]) < 13.0, "ring should be roughly 11 m across"
+    assert float(lo[1]) == pytest.approx(0.0, abs=0.05), "ring should sit on y=0"
+
+    boxer = load_obj(os.path.join(_MODEL_DIR, "boxer.obj"))
+    lo, hi = boxer.bounds()
+    assert 1.6 < float(hi[1] - lo[1]) < 2.3, "boxer should be roughly human height"
+
+
+def test_shipped_models_do_not_override_the_live_ring():
+    """Regression: exporting our own geometry into assets/models/ made the
+    loader swap the procedural ring for a frozen copy of itself, which silently
+    disabled the rope and corner-post occlusion culling."""
+    from boxing_sim.game.arena import build_arena
+    a = build_arena(crowd=False)
+    assert a.external_path is None, "a generated model hijacked the live scene"
+    assert len(a.ropes) == 4
+    assert len(a.post_list) == 4
+
+
+def test_generated_models_are_detected_but_downloads_still_win(tmp_path):
+    import shutil
+    from boxing_sim.engine.objloader import find_model, is_generated
+
+    ours = os.path.join(_MODEL_DIR, "boxing_ring.obj")
+    assert is_generated(ours)
+
+    shutil.copy(ours, tmp_path)
+    assert find_model(str(tmp_path), "ring") is None, "our own export was picked up"
+
+    third_party = tmp_path / "kopag_ring.obj"
+    third_party.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+    assert not is_generated(str(third_party))
+    found = find_model(str(tmp_path), "ring")
+    assert found is not None and os.path.basename(found) == "kopag_ring.obj"
+
+
+def test_export_round_trips_without_losing_geometry(tmp_path):
+    from boxing_sim.engine.objloader import load_obj
+    from tools.export_models import build_ring, write_obj
+
+    src = build_ring()
+    out = str(tmp_path / "ring.obj")
+    nv, nf = write_obj(src, out, "ring")
+    assert (nv, nf) == (len(src.verts), len(src.faces))
+
+    back = load_obj(out)
+    assert back.tri_count == src.tri_count
+    assert np.allclose(np.sort(back.verts, axis=0), np.sort(src.verts, axis=0), atol=1e-4)

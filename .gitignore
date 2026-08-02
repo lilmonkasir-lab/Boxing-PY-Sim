@@ -5,9 +5,16 @@ __pycache__/
 .venv/
 venv/
 
-# Downloaded 3D models - fetch your own copy, see assets/models/README.md
-assets/models/*
+# Third-party 3D models: fetch your own copy, see assets/models/README.md.
+# The .obj/.mtl files this project generates ARE committed (tools/export_models.py),
+# so ignore downloads (which arrive in their own subfolders) but keep our exports.
+assets/models/**/
 !assets/models/README.md
+!assets/models/*.obj
+!assets/models/*.mtl
+
+# launcher-created environment
+.venv/
 
 # headless screenshots
 /shots/

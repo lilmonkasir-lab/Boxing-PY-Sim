@@ -6,10 +6,35 @@ so it runs anywhere pygame runs.
 
 ![gameplay](docs/screenshot.png)
 
+## Run it
+
 ```bash
-pip install -r requirements.txt
-python main.py
+python3 play.py
 ```
+
+That is the whole setup. On first run it builds a private environment in
+`.venv/` and installs pygame + numpy (~30 seconds, once), then starts the game.
+Every later run starts immediately. Any arguments are passed straight through:
+
+```bash
+python3 play.py --difficulty Champion --rounds 12
+python3 play.py --quality low --no-crowd     # slower machines
+python3 play.py --help
+```
+
+<details>
+<summary>Prefer to manage dependencies yourself?</summary>
+
+`pip install -r requirements.txt` is refused by most current systems
+(Debian/Ubuntu/Fedora and Homebrew python are "externally managed", PEP 668),
+which is exactly why `play.py` exists. To do it by hand:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install pygame numpy
+.venv/bin/python main.py
+```
+</details>
 
 ---
 
@@ -30,29 +55,45 @@ python main.py
 | `V` | Free camera (arrows orbit, wheel zooms) |
 | `P` · `M` · `F1` · `F2` | Pause · mute · debug overlay · quality |
 
-```bash
-python main.py --difficulty Champion --rounds 12 --round-length 180
-python main.py --quality low --no-crowd     # slower machines
-python main.py --help
-```
-
 Difficulties: `Amateur`, `Contender`, `Champion`, `Legend`.
 
 ---
 
-## Using the Sketchfab ring model
+## The 3D models
 
-The sim ships with a **procedural ring** modelled on
+Real model files ship in `assets/models/`, exported from the sim's own geometry:
+
+| File | Contents |
+| --- | --- |
+| `boxing_ring.obj` / `.mtl` | Full ring - canvas, skirt, trim, 4 posts, 4 rope runs. 1,690 tris, 11 m across |
+| `boxer.obj` / `.mtl` | A fighter in guard stance. 1,116 tris, 2.0 m tall |
+
+They are plain Wavefront OBJ with materials, so they open directly in Blender,
+MeshLab or any 3D viewer. Regenerate them after changing the geometry:
+
+```bash
+python3 tools/export_models.py
+```
+
+These exports are tagged in their header and **deliberately ignored** by the
+runtime loader. They are a frozen copy of the live scene, so loading one back
+would replace the procedural ring with itself and disable the rope/post
+occlusion culling. Only a genuine third-party model overrides the ring.
+
+### Using the Sketchfab ring instead
+
+The sim's ring is modelled on
 [Kopag 3D's "Boxing Ring"](https://sketchfab.com/3d-models/boxing-ring-861f09ce71014e4baebeb79b2f99b1d2)
 — raised apron, padded skirt, four corner posts with turnbuckle wraps, four
 rope runs. No download required.
 
-To use the real model instead, Sketchfab requires a signed-in download, so it
-can't be fetched automatically:
+To swap in the real thing - Sketchfab requires a signed-in download, so it
+cannot be fetched automatically:
 
 1. Open the [model page](https://sketchfab.com/3d-models/boxing-ring-861f09ce71014e4baebeb79b2f99b1d2)
    and **Download 3D Model → OBJ** (free, Standard licence — credit Kopag 3D).
-2. Unzip it into `assets/models/`.
+2. Unzip it into `assets/models/` (its own subfolder is fine, and stays
+   gitignored).
 3. Run the game. It auto-detects the `.obj`, prints
    `[arena] using downloaded model: ...`, and swaps it in.
 
@@ -128,28 +169,33 @@ swells), so there are no audio files either.
 ## Layout
 
 ```
+play.py       one-command launcher (sets up .venv, then plays)
+main.py       direct entry point, if deps are already installed
 boxing_sim/
   engine/     math3d · mesh · primitives · camera · renderer · objloader
   game/       arena · fighter · combat · ai · match · hud · effects · audio
   app.py      window, input, camera direction, main loop
+assets/models/  boxing_ring + boxer .obj/.mtl
 tools/
   headless_check.py    scripted bot + screenshots, no display needed
   calibrate_reach.py   regenerate the punch reach table
-tests/                 47 tests
+  export_models.py     regenerate the .obj/.mtl assets
+tests/                 57 tests
 ```
 
 ## Development
 
 ```bash
-python -m pytest tests -q                              # 47 tests
-python tools/headless_check.py --seconds 20 --shots 4  # screenshots, headless
-python tools/calibrate_reach.py                        # after rig changes
+.venv/bin/python -m pytest tests -q                          # 57 tests
+.venv/bin/python tools/headless_check.py --seconds 20 --shots 4
+.venv/bin/python tools/calibrate_reach.py    # after changing the rig
+.venv/bin/python tools/export_models.py      # after changing the geometry
 ```
 
 The tests lock down the bugs actually hit while building this: punches that
 couldn't reach, AI ranges disagreeing with hit detection, oversized polygons
-reaching SDL, layer-vs-depth sorting, and rounds being judged on cumulative
-rather than per-round damage.
+reaching SDL, layer-vs-depth sorting, rounds judged on cumulative rather than
+per-round damage, and shipped models silently overriding the live ring.
 
 ## Credits
 

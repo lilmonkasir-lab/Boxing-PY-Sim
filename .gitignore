@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Third-party 3D models: fetch your own copy, see assets/models/README.md.
+# The .obj/.mtl files this project generates ARE committed (tools/export_models.py),
+# so ignore downloads (which arrive in their own subfolders) but keep our exports.
+assets/models/**/
+!assets/models/README.md
+!assets/models/*.obj
+!assets/models/*.mtl
+
+# launcher-created environment
+.venv/
+
+# headless screenshots
+/shots/
+image-search/

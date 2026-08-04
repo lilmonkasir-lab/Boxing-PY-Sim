@@ -1,0 +1,10 @@
+{
+  "appId": "com.nexussec.pentest",
+  "appName": "NexusSec Pentest Suite",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}

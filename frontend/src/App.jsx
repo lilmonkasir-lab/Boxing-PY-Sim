@@ -13,14 +13,15 @@ import PayloadLibraryView from './components/PayloadLibraryView';
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [activeTarget, setActiveTarget] = useState('scanme.nmap.org');
+  const [apiUrl, setApiUrl] = useState('');
   const [isMobileFrame, setIsMobileFrame] = useState(true);
   const [showTerminal, setShowTerminal] = useState(false);
   const [logs, setLogs] = useState([
     {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       type: 'SUCCESS',
-      title: 'NexusSec Mobile Pentest Engine Initialized',
-      data: { status: 'ONLINE', mode: 'Mobile Pentest Kit', version: '2.0.0' }
+      title: 'NexusSec Mobile Pentest Suite APK/PWA Ready',
+      data: { status: 'ONLINE', mode: 'Mobile APK / PWA Container', version: '2.0.0' }
     }
   ]);
 
@@ -31,7 +32,7 @@ export default function App() {
       title,
       data
     };
-    setLogs((prev) => [newLog, ...prev.slice(0, 49)]); // keep last 50 logs
+    setLogs((prev) => [newLog, ...prev.slice(0, 49)]);
   };
 
   const clearLogs = () => setLogs([]);
@@ -48,6 +49,8 @@ export default function App() {
           logsCount={logs.length}
           activeTarget={activeTarget}
           setActiveTarget={setActiveTarget}
+          apiUrl={apiUrl}
+          setApiUrl={setApiUrl}
         />
 
         {/* Main Content Area */}

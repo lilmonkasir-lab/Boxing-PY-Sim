@@ -1,8 +1,15 @@
-import React from 'react';
-import { Shield, Smartphone, Monitor, Terminal, Wifi, BatteryCharging } from 'lucide-react';
+import React, { useState } from 'react';
+import { Shield, Smartphone, Monitor, Terminal, Wifi, BatteryCharging, Server, Settings, Check, X } from 'lucide-react';
 
-export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, setShowTerminal, logsCount, activeTarget, setActiveTarget }) {
+export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, setShowTerminal, logsCount, activeTarget, setActiveTarget, apiUrl, setApiUrl }) {
+  const [showApiModal, setShowApiModal] = useState(false);
+  const [tempApiUrl, setTempApiUrl] = useState(apiUrl);
   const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const saveApiUrl = () => {
+    setApiUrl(tempApiUrl);
+    setShowApiModal(false);
+  };
 
   return (
     <header className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 sticky top-0 z-40">
@@ -16,7 +23,7 @@ export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, 
           </div>
           <div className="flex items-center space-x-2">
             <Wifi className="w-3 h-3 text-emerald-400" />
-            <span className="text-[10px] text-emerald-400 font-bold">5G / SEC</span>
+            <span className="text-[10px] text-emerald-400 font-bold">5G / APK</span>
             <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
           </div>
         </div>
@@ -34,26 +41,23 @@ export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, 
                 NEXUS<span className="text-emerald-400 font-mono">SEC</span>
               </span>
               <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                PRO v2.0
+                APK / PWA
               </span>
             </div>
-            <p className="text-[10px] font-mono text-slate-400 -mt-0.5">Mobile Pentest Toolkit</p>
+            <p className="text-[10px] font-mono text-slate-400 -mt-0.5">Mobile Security Suite</p>
           </div>
         </div>
 
         {/* Header Controls */}
         <div className="flex items-center space-x-1.5">
-          {/* Target input quick view */}
-          <div className="hidden sm:flex items-center bg-slate-950 border border-slate-800 rounded-md px-2 py-1 text-xs">
-            <span className="text-slate-500 mr-1.5 font-mono">Target:</span>
-            <input
-              type="text"
-              value={activeTarget}
-              onChange={(e) => setActiveTarget(e.target.value)}
-              placeholder="e.g. target.com"
-              className="bg-transparent text-emerald-400 font-mono w-28 focus:outline-none focus:w-36 transition-all text-xs"
-            />
-          </div>
+          {/* API Server Settings Button */}
+          <button
+            onClick={() => setShowApiModal(true)}
+            className="p-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg transition-all"
+            title="Configure Backend API Endpoint"
+          >
+            <Server className="w-4 h-4 text-amber-400" />
+          </button>
 
           {/* Terminal Toggle Button */}
           <button
@@ -74,11 +78,11 @@ export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, 
             )}
           </button>
 
-          {/* Device Frame Viewport Toggle */}
+          {/* Viewport Frame Toggle */}
           <button
             onClick={() => setIsMobileFrame(!isMobileFrame)}
             className="p-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-lg transition-all"
-            title={isMobileFrame ? 'Switch to Full Screen View' : 'Switch to Mobile Frame Mode'}
+            title={isMobileFrame ? 'Switch to Full Screen' : 'Switch to Mobile APK View'}
           >
             {isMobileFrame ? (
               <Monitor className="w-4 h-4 text-cyan-400" />
@@ -88,6 +92,53 @@ export default function Navbar({ isMobileFrame, setIsMobileFrame, showTerminal, 
           </button>
         </div>
       </div>
+
+      {/* Backend API Configuration Modal */}
+      {showApiModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 max-w-sm w-full space-y-3 font-mono text-xs shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <div className="flex items-center space-x-1.5">
+                <Server className="w-4 h-4 text-amber-400" />
+                <span className="font-bold text-slate-100">Mobile API Server URL</span>
+              </div>
+              <button onClick={() => setShowApiModal(false)} className="text-slate-400 hover:text-slate-100">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-slate-400 block mb-1 text-[10px]">Python Backend Endpoint:</label>
+              <input
+                type="text"
+                value={tempApiUrl}
+                onChange={(e) => setTempApiUrl(e.target.value)}
+                placeholder="e.g. http://192.168.1.100:5000 or /api"
+                className="w-full bg-slate-950 border border-slate-800 text-emerald-400 rounded p-2 focus:outline-none focus:border-amber-500"
+              />
+              <p className="text-[10px] text-slate-500 mt-1 font-sans">
+                Set to local network IP or VPS server when running as an APK on Android.
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-1">
+              <button
+                onClick={() => setShowApiModal(false)}
+                className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveApiUrl}
+                className="px-3 py-1.5 bg-amber-500 text-slate-950 font-bold rounded flex items-center space-x-1"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Save Endpoint</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

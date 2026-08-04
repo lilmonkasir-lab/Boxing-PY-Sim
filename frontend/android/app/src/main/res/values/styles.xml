@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.NexusSec" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#10b981</item>
+        <item name="colorPrimaryVariant">#059669</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="android:statusBarColor">#080c14</item>
+        <item name="android:navigationBarColor">#080c14</item>
+    </style>
+</resources>
